@@ -1,63 +1,83 @@
-// detect_stickers.js
-// Se inyecta en el WebView de TikTok vía evaluateJavascript() desde
-// MainActivity.kt. A diferencia de la versión Electron, aquí no hay
-// problema de "mundos" JS separados ni de Content Security Policy
-// bloqueando inyección, porque WebView.evaluateJavascript() corre el
-// código directamente en el contexto de la página sin pasar por un
-// <script> tag insertado en el HTML.
-//
-// La comunicación hacia Kotlin se hace vía el puente
-// @JavascriptInterface expuesto como "AndroidBridge" (ver MainActivity.kt).
-//
-// Misma señal de detección que en la versión Windows: TikTok marca cada
-// sticker de chat con alt="sticker" en el <img>, sin importar las clases
-// (que son hashes generados en build y cambian seguido).
+(async function () {
+  if (window.__tiktokStickerScanRunning) return;
+  window.__tiktokStickerScanRunning = true;
 
-(function () {
-  if (window.__stickerGrabberInjected) {
-    // Ya inyectado; solo re-ejecuta el escaneo por si el bridge lo pide de nuevo.
-    return window.__scanForStickers();
-  }
-  window.__stickerGrabberInjected = true;
-
-  const STICKER_ALT_VALUES = ['sticker'];
-  const EXCLUDE_HINTS = ['avatar', 'profile', 'emoji-picker'];
-
-  const SELECTOR_CANDIDATES = [
+  const selectors = [
     'img[alt="sticker"]',
+    '[data-e2e*="sticker"] img',
     '[data-e2e="chat-message"] img',
     '[data-e2e="chat-msg-list"] img',
     '.message-sticker img',
-    '[class*="DivMessageContent"] img',
-    '[class*="MessageContent"] img',
-    '[class*="StickerImage"] img',
-    'img[class*="StickerImage"]'
+    '[class*="Sticker"] img',
+    '[class*="sticker"] img'
   ];
+  const excludedHints = ['avatar', 'profile', 'emoji-picker'];
+  const collected = new Set();
 
-  function isLikelyAvatar(img) {
-    if (STICKER_ALT_VALUES.includes((img.alt || '').toLowerCase())) {
-      return false;
-    }
-    const haystack = `${img.className} ${img.alt || ''} ${img.closest('[class]')?.className || ''}`.toLowerCase();
-    return EXCLUDE_HINTS.some((hint) => haystack.includes(hint));
+  function isStickerImage(img) {
+    const alt = (img.alt || '').toLowerCase();
+    if (alt === 'sticker') return true;
+    const context = `${img.className || ''} ${alt} ${img.closest('[class]')?.className || ''}`.toLowerCase();
+    return context.includes('sticker') && !excludedHints.some((hint) => context.includes(hint));
   }
 
-  function findStickerImages(root = document.body) {
-    const found = new Set();
-    for (const selector of SELECTOR_CANDIDATES) {
-      root.querySelectorAll?.(selector)?.forEach((img) => found.add(img));
-    }
-    return [...found].filter((img) => !isLikelyAvatar(img));
+  function scan(root = document) {
+    const images = new Set();
+    selectors.forEach((selector) => {
+      root.querySelectorAll?.(selector).forEach((img) => images.add(img));
+    });
+    images.forEach((img) => {
+      const url = img.currentSrc || img.src;
+      if (isStickerImage(img) && /^https?:\/\//.test(url)) collected.add(url);
+    });
+    AndroidBridge.onStickersFound(JSON.stringify([...collected]));
   }
 
-  // Expuesta en window para que MainActivity.kt pueda volver a llamarla
-  // en cada click de "Escanear Conversación" sin reinyectar todo el script.
-  window.__scanForStickers = function () {
-    const images = findStickerImages();
-    const urls = [...new Set(images.map((img) => img.src))];
-    AndroidBridge.onStickersFound(JSON.stringify(urls));
-    return urls.length;
-  };
+  function stickerScore(element) {
+    if (!element || element === document.body) return -1;
+    const style = getComputedStyle(element);
+    const scrollable = /(auto|scroll)/.test(style.overflowY) && element.scrollHeight > element.clientHeight;
+    if (!scrollable) return -1;
+    const stickerCount = selectors.reduce(
+      (total, selector) => total + element.querySelectorAll(selector).length,
+      0
+    );
+    return stickerCount * 100000 + Math.min(element.scrollHeight, 99999);
+  }
 
-  window.__scanForStickers();
+  function findBestScroller() {
+    return [...document.querySelectorAll('div, section, main, ul')]
+      .map((element) => ({ element, score: stickerScore(element) }))
+      .filter(({ score }) => score >= 0)
+      .sort((a, b) => b.score - a.score)[0]?.element || null;
+  }
+
+  const wait = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
+
+  try {
+    scan();
+    const scroller = findBestScroller();
+    if (scroller) {
+      let unchangedRounds = 0;
+      let previousHeight = -1;
+      let previousCount = -1;
+      for (let round = 0; round < 80 && unchangedRounds < 4; round += 1) {
+        scroller.scrollTop = scroller.scrollHeight;
+        scroller.dispatchEvent(new Event('scroll', { bubbles: true }));
+        await wait(450);
+        scan(scroller);
+
+        const unchanged = previousHeight === scroller.scrollHeight && previousCount === collected.size;
+        unchangedRounds = unchanged ? unchangedRounds + 1 : 0;
+        previousHeight = scroller.scrollHeight;
+        previousCount = collected.size;
+      }
+    }
+    scan();
+    AndroidBridge.onScanFinished(collected.size);
+  } catch (error) {
+    AndroidBridge.onScanError(error?.message || String(error));
+  } finally {
+    window.__tiktokStickerScanRunning = false;
+  }
 })();

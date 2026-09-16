@@ -22,11 +22,12 @@ class StickerThumbAdapter(
     }
 
     fun submitList(newUrls: List<String>) {
+        val previouslyUnselected = urls.filterNot(selectedUrls::contains).toSet()
         urls.clear()
-        urls.addAll(newUrls)
-        
+        urls.addAll(newUrls.distinct())
+
         selectedUrls.clear()
-        selectedUrls.addAll(newUrls)
+        selectedUrls.addAll(urls.filterNot(previouslyUnselected::contains))
         notifyDataSetChanged()
         onSelectionChanged(selectedUrls.size)
     }
