@@ -14,10 +14,11 @@ targets:
     sources:
       - path: StickerBridge
         excludes: [Resources]
-    resources:
       - path: StickerBridge/Resources/web
         type: folder
+        buildPhase: resources
       - path: StickerBridge/Resources/detect-favorites.js
+        buildPhase: resources
     info:
       path: StickerBridge/Info.plist
       properties:

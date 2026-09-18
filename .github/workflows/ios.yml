@@ -22,4 +22,6 @@ jobs:
           cd ios
           xcodegen generate
           pod install
-          xcodebuild -workspace StickerBridge.xcworkspace -scheme StickerBridge -sdk iphonesimulator -configuration Debug CODE_SIGNING_ALLOWED=NO build
+          xcodebuild -workspace StickerBridge.xcworkspace -scheme StickerBridge -sdk iphonesimulator -configuration Debug -derivedDataPath build CODE_SIGNING_ALLOWED=NO build
+          test -f build/Build/Products/Debug-iphonesimulator/StickerBridge.app/web/index.html
+          test -f build/Build/Products/Debug-iphonesimulator/StickerBridge.app/detect-favorites.js
