@@ -126,23 +126,17 @@ object StickerProcessor {
 
     private suspend fun encodeStatic(context: Context, sourceBitmap: Bitmap, outputFile: File): File {
         val resized = resizeToStickerCanvas(sourceBitmap)
-
-        val qualitySteps = listOf(80f, 65f, 50f, 35f, 20f)
-
-        for (quality in qualitySteps) {
-            val candidate = File(outputFile.parentFile, "${outputFile.nameWithoutExtension}_tmp.webp")
-            encodeStaticAtQuality(context, resized, candidate, quality)
-            if (candidate.length() <= MAX_STATIC_BYTES) {
-                candidate.copyTo(outputFile, overwrite = true)
-                candidate.delete()
-                resized.recycle()
-                return outputFile
+        val candidate = File(outputFile.parentFile, "${outputFile.nameWithoutExtension}_tmp.webp")
+        try {
+            for (quality in listOf(80f, 65f, 50f, 35f, 20f)) {
+                encodeStaticAtQuality(context, resized, candidate, quality)
+                if (candidate.length() in 1..MAX_STATIC_BYTES.toLong()) {
+                    candidate.copyTo(outputFile, overwrite = true)
+                    return outputFile
+                }
             }
-            candidate.delete()
-        }
-
-        resized.recycle()
-        throw IllegalArgumentException("No se pudo reducir el sticker a 100 KB.")
+            throw IllegalArgumentException("No se pudo reducir el sticker a 100 KB.")
+        } finally { candidate.delete(); resized.recycle() }
     }
 
     private suspend fun encodeStaticAtQuality(context: Context, bitmap: Bitmap, outputFile: File, quality: Float) =
@@ -171,29 +165,17 @@ object StickerProcessor {
         frames.forEach { require(it.timestampMs - previous >= 8) { "Fotograma de duración inferior a 8 ms." }; previous = it.timestampMs }
         val resizedFrames = frames.map { it.copy(bitmap = resizeToStickerCanvas(it.bitmap)) }
 
-        val qualitySteps = listOf(75f, 50f, 30f, 15f, 5f)
-
-        for (quality in qualitySteps) {
-            val candidate = File(outputFile.parentFile, "${outputFile.nameWithoutExtension}_tmp.webp")
-            encodeAnimatedAtQuality(context, resizedFrames, candidate, quality)
-            if (candidate.length() <= MAX_ANIMATED_BYTES) {
-                candidate.copyTo(outputFile, overwrite = true)
-                candidate.delete()
-                resizedFrames.forEach { it.bitmap.recycle() }
-                return outputFile
+        val candidate = File(outputFile.parentFile, "${outputFile.nameWithoutExtension}_tmp.webp")
+        try {
+            for (quality in listOf(75f, 50f, 30f, 15f, 5f)) {
+                encodeAnimatedAtQuality(context, resizedFrames, candidate, quality)
+                if (candidate.length() in 1..MAX_ANIMATED_BYTES.toLong()) {
+                    candidate.copyTo(outputFile, overwrite = true)
+                    return outputFile
+                }
             }
-            candidate.delete()
-        }
-
-        resizedFrames.forEach { it.bitmap.recycle() }
-        throw Exception("El sticker animado es demasiado pesado para WhatsApp incluso con máxima compresión.")
-    }
-
-    private fun trimToMaxDuration(frames: List<DecodedFrame>, maxDurationMs: Long): List<DecodedFrame> {
-        if (frames.isEmpty()) return frames
-        val firstTimestamp = frames.first().timestampMs
-        val kept = frames.takeWhile { (it.timestampMs - firstTimestamp) <= maxDurationMs }
-        return if (kept.isEmpty()) listOf(frames.first()) else kept
+            throw IllegalArgumentException("El sticker animado supera 500 KB incluso con máxima compresión.")
+        } finally { candidate.delete(); resizedFrames.forEach { it.bitmap.recycle() } }
     }
 
     private suspend fun encodeAnimatedAtQuality(

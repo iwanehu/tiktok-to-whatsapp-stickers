@@ -60,7 +60,7 @@ class TikTokBridge : ComponentActivity() {
                     value
                 }
                 if (result.has("error")) error(result.getString("error"))
-                val urls = result.getJSONArray("urls"); val output = JSONArray(); val hashes = mutableSetOf<String>(); var failed = 0
+                val urls = result.getJSONArray("urls"); val output = JSONArray(); val hashes = mutableSetOf<String>(); var failed = 0; var totalEncoded = 0
                 for (i in 0 until minOf(120, urls.length())) {
                     status.text = "Preparando ${i+1}/${urls.length()}…"
                     try {
@@ -75,7 +75,11 @@ class TikTokBridge : ComponentActivity() {
                                     .put("base64", Base64.encodeToString(temp.readBytes(), Base64.NO_WRAP))
                             } finally { temp.delete() }
                         }
-                        if (sticker != null) output.put(sticker)
+                        if (sticker != null) {
+                            val size = sticker.getString("base64").length
+                            if (totalEncoded + size > 12 * 1024 * 1024) { failed += urls.length() - i; break }
+                            totalEncoded += size; output.put(sticker)
+                        }
                     } catch (e: CancellationException) { throw e }
                     catch (e: Exception) { failed++ }
                 }

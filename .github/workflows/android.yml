@@ -26,6 +26,7 @@ jobs:
           npm ci --prefix pwa
           npm run build --prefix pwa
           node scripts/sync-web.mjs
+          node --test tests/detector.test.mjs
 
       - name: Set up Java 17
         uses: actions/setup-java@v4

@@ -61,7 +61,7 @@ final class TikTokBridge: UIViewController, WKNavigationDelegate {
                 }
                 if let error=result?["error"] as? String { throw StickerError(error) }
                 guard let urls=result?["urls"] as? [String] else { throw StickerError("El panel no respondió.") }
-                var imported:[[String:Any]]=[], seen=Set<String>(),failed=0
+                var imported:[[String:Any]]=[], seen=Set<String>(),failed=0, totalBytes=0
                 let downloader=StickerDownloader()
                 for (index,value) in urls.prefix(120).enumerated() {
                     try Task.checkCancellation();status.text="Preparando \(index+1)/\(urls.count)…"
@@ -71,6 +71,8 @@ final class TikTokBridge: UIViewController, WKNavigationDelegate {
                         let hash=SHA256.hash(data:data).map { String(format:"%02x",$0) }.joined()
                         guard seen.insert(hash).inserted else { continue }
                         let processed=try await Task.detached(priority:.userInitiated) { try StickerProcessor.process(data) }.value
+                        if totalBytes + processed.data.count > 9*1024*1024 { failed += urls.count-index; break }
+                        totalBytes += processed.data.count
                         imported.append(["name":"Sticker \(index+1)","base64":processed.data.base64EncodedString(),"animated":processed.animated])
                     } catch is CancellationError { throw CancellationError() } catch { failed += 1 }
                 }
