@@ -141,7 +141,7 @@ class StickerContentProvider : ContentProvider() {
         android.util.Log.d("TikTokStickers", "WhatsApp solicita archivo: $uri")
         
         val segments = uri.pathSegments
-        if (segments.size < 3) {
+        if (mode != "r" || MATCHER.match(uri) != STICKERS_ASSET_CODE || segments.size != 3) {
             throw FileNotFoundException("URI con formato inesperado: $uri")
         }
         val identifier = segments[segments.size - 2]
@@ -150,6 +150,7 @@ class StickerContentProvider : ContentProvider() {
         val pack = StickerPackRepository.getPackByIdentifier(identifier)
             ?: throw FileNotFoundException("No hay sticker pack activo con identifier: $identifier")
 
+        if (fileName != pack.trayImageFile && pack.stickers.none { it.imageFileName == fileName }) throw FileNotFoundException("Archivo no declarado")
         val dir = StickerPackRepository.getStickerPackDir(context!!, identifier)
         val file = File(dir, fileName)
 

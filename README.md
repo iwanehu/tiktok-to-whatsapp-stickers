@@ -30,6 +30,8 @@ Una aplicación nativa para Android que permite descargar stickers desde TikTok 
 ## 🌟 Características
 
 - **Extracción Directa:** Captura e importa stickers estáticos y animados desde TikTok.
+- **Escaneo acumulativo:** Recorre automáticamente el panel abierto de stickers y elimina URLs duplicadas.
+- **Importación por lotes:** Crea todos los paquetes necesarios sin descartar stickers cuando hay más de 30.
 - **Soporte de Stickers Animados:** Utiliza librerías nativas (`libwebp`) para procesar e integrar stickers animados en formato `.webp`, cumpliendo estrictamente con los requerimientos (dimensiones, tamaño y formato) de WhatsApp.
 - **Integración Nativa One-Tap:** Instala los paquetes de stickers en WhatsApp de manera directa (sin apps intermedias ni exportar archivos manualmente), utilizando la API oficial (`StickerContentProvider` y los Intents de integración de WhatsApp).
 - **Interfaz Fluida e Intuitiva:** Aplicación construida enteramente en Kotlin, utilizando buenas prácticas y programación asíncrona (Corrutinas).
@@ -69,6 +71,16 @@ Una aplicación nativa para Android que permite descargar stickers desde TikTok 
      ```bash
      ./gradlew assembleDebug
      ```
+
+## 📱 Importar stickers guardados
+
+1. Inicia sesión en TikTok dentro de la aplicación.
+2. Abre **Mensajes**, entra en un chat y despliega el panel de stickers guardados.
+3. Mantén ese panel abierto y pulsa **Escanear stickers guardados**.
+4. Revisa la selección y pulsa **Añadir a WhatsApp**.
+5. Si se crean varios paquetes, vuelve a la aplicación después de confirmar cada uno y pulsa **Añadir siguiente paquete**.
+
+TikTok no ofrece una API pública para descargar la colección privada de stickers. Por eso el escaneo se realiza localmente sobre el panel que el propio usuario abre después de iniciar sesión.
 
 ---
 
