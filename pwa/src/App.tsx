@@ -1,65 +1,29 @@
-import { ChangeEvent, useMemo, useState } from 'react'
-import { saveBlob, toWhatsAppWebP } from './image'
-
-type Sticker = { id: string; name: string; blob: Blob; url: string }
-declare global { interface Window { Capacitor?: { Plugins?: { StickerBridge?: { addPack(input: unknown): Promise<void> } } } } }
-
-export default function App() {
-  const [packName, setPackName] = useState('Mis stickers')
-  const [author, setAuthor] = useState('Sticker Bridge')
-  const [stickers, setStickers] = useState<Sticker[]>([])
-  const [busy, setBusy] = useState(false)
-  const [message, setMessage] = useState('Importa entre 3 y 30 imágenes.')
-  const canExport = stickers.length >= 3 && stickers.length <= 30
-  const nativeBridge = Boolean(window.Capacitor?.Plugins?.StickerBridge)
-  const total = useMemo(() => stickers.reduce((sum, item) => sum + item.blob.size, 0), [stickers])
-
-  async function importFiles(event: ChangeEvent<HTMLInputElement>) {
-    const files = Array.from(event.target.files ?? []).slice(0, 30 - stickers.length)
-    if (!files.length) return
-    setBusy(true); setMessage('Convirtiendo imágenes…')
-    try {
-      const converted = await Promise.all(files.map(async file => {
-        if (!file.type.startsWith('image/')) throw new Error(`${file.name} no es una imagen.`)
-        const blob = await toWhatsAppWebP(file)
-        return { id: crypto.randomUUID(), name: file.name.replace(/\.[^.]+$/, ''), blob, url: URL.createObjectURL(blob) }
-      }))
-      setStickers(current => [...current, ...converted])
-      setMessage(`${converted.length} sticker(s) importados correctamente.`)
-    } catch (error) { setMessage(error instanceof Error ? error.message : 'No se pudo importar.') }
-    finally { setBusy(false); event.target.value = '' }
-  }
-
-  function remove(id: string) {
-    setStickers(current => { const found=current.find(x=>x.id===id); if(found) URL.revokeObjectURL(found.url); return current.filter(x=>x.id!==id) })
-  }
-
-  async function exportPack() {
-    if (!canExport) return setMessage('WhatsApp requiere al menos 3 stickers por paquete.')
-    const bridge = window.Capacitor?.Plugins?.StickerBridge
-    if (bridge) {
-      await bridge.addPack({ name: packName, author, stickers: stickers.map(x => ({ name: x.name })) })
-      return
-    }
-    if (navigator.share && navigator.canShare?.({ files: [new File([stickers[0].blob], 'sticker.webp', {type:'image/webp'})] })) {
-      const files = stickers.map((item, index) => new File([item.blob], `sticker-${index + 1}.webp`, { type: 'image/webp' }))
-      await navigator.share({ title: packName, text: `Paquete creado por ${author}`, files })
-      return
-    }
-    stickers.forEach((item, index) => saveBlob(item.blob, `sticker-${index + 1}.webp`))
-    setMessage('Archivos descargados. La instalación directa llegará con el puente móvil.')
-  }
-
-  return <main>
-    <header><div><span className="eyebrow">ANDROID · IOS · WEB</span><h1>Sticker Bridge</h1><p>Crea tu paquete sin entregar tus credenciales de TikTok.</p></div><a className="secondary" href="https://www.tiktok.com/messages" target="_blank" rel="noreferrer">Abrir TikTok ↗</a></header>
-    <section className="card intro"><div><b>1.</b><span>Guarda o comparte las imágenes desde TikTok.</span></div><div><b>2.</b><span>Impórtalas aquí y crea el paquete.</span></div><div><b>3.</b><span>Compártelo o añádelo desde la app móvil.</span></div></section>
-    <section className="card editor">
-      <div className="fields"><label>Nombre del paquete<input value={packName} maxLength={128} onChange={e=>setPackName(e.target.value)}/></label><label>Autor<input value={author} maxLength={128} onChange={e=>setAuthor(e.target.value)}/></label></div>
-      <label className={`drop ${busy?'disabled':''}`}><input type="file" accept="image/png,image/jpeg,image/webp" multiple disabled={busy||stickers.length>=30} onChange={importFiles}/><strong>{busy?'Procesando…':'Seleccionar imágenes'}</strong><small>PNG, JPEG o WebP · máximo 30</small></label>
-      <div className="status"><span>{message}</span><span>{stickers.length}/30 · {(total/1024).toFixed(0)} KB</span></div>
-      {stickers.length ? <div className="grid">{stickers.map((item,index)=><article key={item.id}><img src={item.url} alt={item.name}/><button aria-label={`Eliminar sticker ${index+1}`} onClick={()=>remove(item.id)}>×</button><span>{index+1}</span></article>)}</div> : <div className="empty">Tus stickers aparecerán aquí</div>}
-      <button className="primary" disabled={!canExport||busy} onClick={()=>void exportPack()}>{nativeBridge?'Añadir a WhatsApp':'Compartir paquete'}</button>
-      {!nativeBridge&&<p className="hint">En el navegador se compartirán o descargarán los WebP. La instalación automática requiere la app móvil.</p>}
-    </section>
-  </main>
+import {useEffect,useRef,useState} from 'react'
+import type {ChangeEvent} from 'react'
+import {saveBlob,toWhatsAppWebP} from './image'
+import {base64Blob,blobBase64,isNative,nativeCall} from './native'
+import type {ImportResult,ExportResult} from './native'
+type Sticker={id:string;name:string;blob:Blob;url:string;animated:boolean;selected:boolean;hash:string}
+export default function App(){
+ const [name,setName]=useState('Mis stickers'),[author,setAuthor]=useState('Sticker Bridge'),[items,setItems]=useState<Sticker[]>([])
+ const [busy,setBusy]=useState(false),[message,setMessage]=useState('Importa tus favoritos y selecciona los que quieras añadir.'),[cleanup,setCleanup]=useState(true),[awaiting,setAwaiting]=useState<string[]>([])
+ const ref=useRef(items);ref.current=items;useEffect(()=>()=>ref.current.forEach(s=>URL.revokeObjectURL(s.url)),[])
+ const selected=items.filter(s=>s.selected),native=isNative(),mixed=selected.some(s=>s.animated)&&selected.some(s=>!s.animated)
+ const valid=selected.length>=3&&selected.length<=30&&!mixed&&name.trim()&&author.trim()
+ async function add(values:{name:string;blob:Blob;animated:boolean}[]){const hashes=new Set(ref.current.map(s=>s.hash));const added:Sticker[]=[];for(const v of values){const hash=Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',await v.blob.arrayBuffer())),n=>n.toString(16).padStart(2,'0')).join('');if(hashes.has(hash))continue;hashes.add(hash);added.push({...v,hash,id:crypto.randomUUID(),url:URL.createObjectURL(v.blob),selected:true})}setItems(current=>[...current,...added]);return added.length}
+ function remove(ids:string[]){setItems(current=>{current.filter(s=>ids.includes(s.id)).forEach(s=>URL.revokeObjectURL(s.url));return current.filter(s=>!ids.includes(s.id))})}
+ async function importTikTok(){if(!native)return setMessage('Importar favoritos necesita la app Android o iOS. La web no puede acceder a tu sesión de TikTok.');setBusy(true);setMessage('Abre Mensajes → Stickers → Favoritos y pulsa Detectar favoritos.');try{const r=await nativeCall<ImportResult>('importTikTok');const n=await add(r.stickers.map(s=>({name:s.name,blob:base64Blob(s.base64),animated:s.animated})));setMessage(`${n} nuevos. ${r.warning||''}`)}catch(e){setMessage(String(e))}finally{setBusy(false)}}
+ async function importFiles(e:ChangeEvent<HTMLInputElement>){const files=Array.from(e.target.files??[]);e.target.value='';setBusy(true);let n=0;const errors:string[]=[];try{const values=[];for(const f of files){try{values.push({name:f.name,blob:await toWhatsAppWebP(f),animated:false})}catch(err){errors.push(String(err))}}n=await add(values);setMessage(`${n} importados. ${errors.join(' ')}`)}finally{setBusy(false)}}
+ async function exportPack(){if(!valid||busy)return;setBusy(true);try{if(native){const r=await nativeCall<ExportResult>('exportPack',{name:name.trim(),author:author.trim(),stickers:await Promise.all(selected.map(async s=>({base64:await blobBase64(s.blob),animated:s.animated})))});if(r.status==='confirmed'){if(cleanup)remove(selected.map(s=>s.id));setMessage('Paquete añadido. Temporales eliminados; los archivos necesarios del paquete se conservan.')}else if(r.status==='handed_off'){setAwaiting(selected.map(s=>s.id));setMessage('Confirma en WhatsApp y vuelve aquí. iOS no comunica si el paquete se ha añadido.')}else setMessage('Sin confirmar. Conservamos tu selección para reintentarlo.')}else{const files=selected.map((s,i)=>new File([s.blob],`sticker-${i+1}.webp`,{type:'image/webp'}));if(navigator.canShare?.({files}))await navigator.share({title:name,files});else selected.forEach((s,i)=>saveBlob(s.blob,`sticker-${i+1}.webp`));setMessage('Archivos compartidos o descargados. Esto no instala un paquete en WhatsApp.')}}catch(e){setMessage(String(e))}finally{setBusy(false)}}
+ return <main><header><div><span className="eyebrow">STICKERS · SIN GRABACIONES</span><h1>Sticker Bridge</h1><p>Tus favoritos, listos para compartir.</p></div><span className="mode">{native?'App móvil':'Versión web'}</span></header>
+ <section className="card intro"><div><b>1</b><span>Abre tus favoritos de TikTok.</span></div><div><b>2</b><span>Detecta y selecciona stickers.</span></div><div><b>3</b><span>Añade el paquete a WhatsApp.</span></div></section>
+ <section className="card editor"><button className="primary import" disabled={busy||awaiting.length>0} onClick={()=>void importTikTok()}>Importar desde TikTok</button>{!native&&<p className="hint">La importación directa funciona en la app móvil. Aquí puedes preparar archivos compatibles.</p>}
+ <div className="fields"><label>Nombre del paquete<input maxLength={128} value={name} onChange={e=>setName(e.target.value)}/></label><label>Autor<input maxLength={128} value={author} onChange={e=>setAuthor(e.target.value)}/></label></div>
+ <label className="file-picker">Importar archivos<input type="file" accept="image/png,image/jpeg,image/webp" multiple disabled={busy||awaiting.length>0} onChange={importFiles}/></label>
+ <div className="status" role="status" aria-live="polite"><span>{message}</span><span>{selected.length} seleccionados · {items.length} disponibles</span></div>
+ {items.length>0&&<div className="selection-tools">{[false,true].map(animated=><button key={String(animated)} disabled={busy||awaiting.length>0} onClick={()=>setItems(s=>s.map(x=>({...x,selected:x.animated===animated})))}>{animated?'Animados':'Estáticos'}</button>)}<button disabled={busy||awaiting.length>0} onClick={()=>setItems(s=>s.map(x=>({...x,selected:false})))}>Deseleccionar</button></div>}
+ {items.length?<div className="grid">{items.map((s,i)=><article key={s.id} className={s.selected?'selected':''}><label><input type="checkbox" checked={s.selected} disabled={busy||awaiting.length>0} onChange={()=>setItems(all=>all.map(x=>x.id===s.id?{...x,selected:!x.selected}:x))}/><img src={s.url} alt={`Sticker ${i+1}`}/><span>{s.animated?'Animado':'Estático'}</span></label><button disabled={busy||awaiting.length>0} aria-label={`Eliminar sticker ${i+1}`} onClick={()=>remove([s.id])}>×</button></article>)}</div>:<div className="empty">Los stickers que importes aparecerán aquí.</div>}
+ <p className="hint">Selecciona de 3 a 30 stickers del mismo tipo por paquete.{mixed?' Separa los animados de los estáticos.':''}</p><label className="cleanup"><input type="checkbox" checked={cleanup} onChange={e=>setCleanup(e.target.checked)}/>Liberar la selección tras confirmar la exportación</label>
+ <button className="primary" disabled={!valid||busy||awaiting.length>0} onClick={()=>void exportPack()}>{busy?'Procesando…':native?'Exportar a WhatsApp':'Compartir archivos'}</button>
+ {awaiting.length>0&&<div className="confirmation"><p>¿Has añadido el paquete en WhatsApp?</p><button className="secondary" onClick={()=>{if(cleanup)remove(awaiting);setAwaiting([]);setMessage('Confirmación registrada.')}}>Sí, ya lo añadí</button><button className="secondary" onClick={()=>{setAwaiting([]);setMessage('Selección conservada.')}}>No, conservar selección</button></div>}</section></main>
 }

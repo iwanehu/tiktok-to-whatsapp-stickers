@@ -63,7 +63,7 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="8dp"
-            android:text="Escanear Conversación"
+            android:text="Escanear stickers guardados"
             android:backgroundTint="@color/tiktok_red"
             android:textColor="@android:color/white"
             app:layout_constraintTop_toBottomOf="@id/stickerGrid" />

@@ -1,0 +1,25 @@
+name: iOS simulator build
+on:
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: macos-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: |
+          npm ci --prefix pwa
+          npm run build --prefix pwa
+          node scripts/sync-web.mjs
+      - run: brew install xcodegen
+      - run: |
+          cd ios
+          xcodegen generate
+          pod install
+          xcodebuild -workspace StickerBridge.xcworkspace -scheme StickerBridge -sdk iphonesimulator -configuration Debug CODE_SIGNING_ALLOWED=NO build

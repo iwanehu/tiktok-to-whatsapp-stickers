@@ -33,40 +33,32 @@ object StickerProcessor {
         return processStickerBytes(context, rawBytes, outputFile)
     }
 
-    private fun downloadBytes(url: String): ByteArray {
-        val secureUrl = url.replace("http://", "https://")
-        val connection = URL(secureUrl).openConnection() as java.net.HttpURLConnection
-        
-        connection.setRequestProperty("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
-        connection.connect()
-        return connection.inputStream.use { it.readBytes() }
-    }
+    private fun downloadBytes(url: String): ByteArray = SourcePolicy.download(url)
 
-    private suspend fun processStickerBytes(context: Context, rawBytes: ByteArray, outputFile: File): ProcessResult {
-        val tempInputFile = File(context.cacheDir, "raw_${System.currentTimeMillis()}.webp")
-        tempInputFile.writeBytes(rawBytes)
-
-        return try {
-            val frames = decodeAllFrames(context, tempInputFile)
-            tempInputFile.delete()
-
-            val isAnimated = frames.size > 1
-            val file = if (!isAnimated) {
-                encodeStatic(context, frames.first().bitmap, outputFile)
-            } else {
-                encodeAnimated(context, frames, outputFile)
-            }
-            ProcessResult(file, isAnimated)
-        } catch (e: Exception) {
-            tempInputFile.delete()
-            android.util.Log.e("TikTokStickers", "Error decodificando frames con libwebp", e)
-            
-            val fallbackBitmap = android.graphics.BitmapFactory.decodeByteArray(rawBytes, 0, rawBytes.size)
-                ?: throw Exception("No es un WebP válido y tampoco se pudo decodificar como imagen estándar: ${e.message}")
-            
-            val file = encodeStatic(context, fallbackBitmap, outputFile)
-            ProcessResult(file, false)
+    suspend fun processStickerBytes(context: Context, rawBytes: ByteArray, outputFile: File): ProcessResult {
+        require(rawBytes.size in 1..10 * 1024 * 1024) { "Archivo vacío o demasiado grande." }
+        val webp = rawBytes.size >= 12 && String(rawBytes, 0, 4, Charsets.US_ASCII) == "RIFF" && String(rawBytes, 8, 4, Charsets.US_ASCII) == "WEBP"
+        if (!webp) {
+            val png = rawBytes.size >= 8 && rawBytes[0] == 0x89.toByte() && String(rawBytes, 1, 3, Charsets.US_ASCII) == "PNG"
+            val jpeg = rawBytes.size >= 2 && rawBytes[0] == 0xff.toByte() && rawBytes[1] == 0xd8.toByte()
+            require(png || jpeg) { "Formato no compatible; no se convertirá una animación en imagen fija." }
+            require(!png || !String(rawBytes, Charsets.ISO_8859_1).contains("acTL")) { "APNG no compatible." }
+            val bounds = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            android.graphics.BitmapFactory.decodeByteArray(rawBytes, 0, rawBytes.size, bounds)
+            require(bounds.outWidth > 0 && bounds.outHeight > 0 && bounds.outWidth.toLong() * bounds.outHeight <= 16000000) { "Dimensiones no compatibles." }
+            val bitmap = android.graphics.BitmapFactory.decodeByteArray(rawBytes, 0, rawBytes.size) ?: error("Imagen inválida")
+            return try { ProcessResult(encodeStatic(context, bitmap, outputFile), false) } finally { bitmap.recycle() }
         }
+        val temp = File.createTempFile("original_", ".webp", context.cacheDir)
+        var frames: List<DecodedFrame> = emptyList()
+        try {
+            temp.writeBytes(rawBytes)
+            frames = decodeAllFrames(context, temp)
+            val animated = frames.size > 1
+            if (animated) encodeAnimated(context, frames, outputFile) else encodeStatic(context, frames.first().bitmap, outputFile)
+            require(outputFile.length() in 1..(if (animated) MAX_ANIMATED_BYTES else MAX_STATIC_BYTES).toLong()) { "Tamaño final inválido." }
+            return ProcessResult(outputFile, animated)
+        } finally { frames.forEach { it.bitmap.recycle() }; temp.delete() }
     }
 
     private data class DecodedFrame(val bitmap: Bitmap, val timestampMs: Long)
@@ -80,11 +72,15 @@ object StickerProcessor {
             val info = decoder.decodeInfo()
             android.util.Log.i("TikTokStickers", "WebPInfo frameCount: ${info.frameCount}, hasAnimation: ${info.hasAnimation}")
             
+            require(info.frameCount in 1..300) { "Demasiados fotogramas." }
             var frameIndex = 0
+            var pixelBudget = 0L
             while (decoder.hasNextFrame()) {
                 val frameResult = decoder.decodeNextFrame()
                 val bitmap = frameResult.frame
                 if (bitmap != null) {
+                    pixelBudget += bitmap.width.toLong() * bitmap.height
+                    require(pixelBudget <= 24000000) { "Animación demasiado grande para procesar con seguridad." }
                     frames.add(DecodedFrame(
                         bitmap.copy(bitmap.config ?: Bitmap.Config.ARGB_8888, false), 
                         frameResult.timestamp.toLong() 
@@ -102,6 +98,7 @@ object StickerProcessor {
             return frames
         } catch (e: Exception) {
             decoder.release()
+            frames.forEach { it.bitmap.recycle() }
             throw e
         }
     }
@@ -144,9 +141,8 @@ object StickerProcessor {
             candidate.delete()
         }
 
-        encodeStaticAtQuality(context, resized, outputFile, qualitySteps.last())
         resized.recycle()
-        return outputFile
+        throw IllegalArgumentException("No se pudo reducir el sticker a 100 KB.")
     }
 
     private suspend fun encodeStaticAtQuality(context: Context, bitmap: Bitmap, outputFile: File, quality: Float) =
@@ -170,8 +166,10 @@ object StickerProcessor {
         }
 
     private suspend fun encodeAnimated(context: Context, frames: List<DecodedFrame>, outputFile: File): File {
-        val trimmedFrames = trimToMaxDuration(frames, MAX_ANIMATED_DURATION_MS)
-        val resizedFrames = trimmedFrames.map { it.copy(bitmap = resizeToStickerCanvas(it.bitmap)) }
+        require(frames.last().timestampMs <= MAX_ANIMATED_DURATION_MS) { "La animación supera 10 segundos; no se recorta automáticamente." }
+        var previous = 0L
+        frames.forEach { require(it.timestampMs - previous >= 8) { "Fotograma de duración inferior a 8 ms." }; previous = it.timestampMs }
+        val resizedFrames = frames.map { it.copy(bitmap = resizeToStickerCanvas(it.bitmap)) }
 
         val qualitySteps = listOf(75f, 50f, 30f, 15f, 5f)
 
@@ -226,19 +224,12 @@ object StickerProcessor {
         )
 
         try {
-            val baseTimestamp = first.timestampMs
+            var timestamp = 0L
             for (frame in frames) {
-                encoder.addFrame(frame.timestampMs - baseTimestamp, frame.bitmap)
+                encoder.addFrame(timestamp, frame.bitmap)
+                timestamp = frame.timestampMs
             }
-            val lastFrame = frames.last()
-            
-            val lastFrameDuration = if (frames.size > 1) {
-                lastFrame.timestampMs - frames[frames.size - 2].timestampMs
-            } else {
-                33L
-            }
-            
-            encoder.assemble(lastFrame.timestampMs - baseTimestamp + lastFrameDuration, Uri.fromFile(outputFile))
+            encoder.assemble(timestamp, Uri.fromFile(outputFile))
             encoder.release()
             cont.resume(Unit)
         } catch (e: Exception) {

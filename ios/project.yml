@@ -1,0 +1,27 @@
+name: StickerBridge
+options:
+  deploymentTarget:
+    iOS: '15.0'
+settings:
+  base:
+    SWIFT_VERSION: '5.0'
+    PRODUCT_BUNDLE_IDENTIFIER: com.iwanehu.stickerbridge
+    TARGETED_DEVICE_FAMILY: '1,2'
+targets:
+  StickerBridge:
+    type: application
+    platform: iOS
+    sources:
+      - path: StickerBridge
+        excludes: [Resources]
+    resources:
+      - path: StickerBridge/Resources/web
+        type: folder
+      - path: StickerBridge/Resources/detect-favorites.js
+    info:
+      path: StickerBridge/Info.plist
+      properties:
+        CFBundleDisplayName: Sticker Bridge
+        LSApplicationQueriesSchemes: [whatsapp]
+        UILaunchScreen: {}
+        UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait, UIInterfaceOrientationLandscapeLeft, UIInterfaceOrientationLandscapeRight]

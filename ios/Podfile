@@ -1,0 +1,5 @@
+platform :ios, '15.0'
+use_frameworks!
+target 'StickerBridge' do
+  pod 'SDWebImageWebPCoder', '0.14.6'
+end

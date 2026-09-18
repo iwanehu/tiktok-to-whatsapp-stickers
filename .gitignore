@@ -14,3 +14,14 @@
 .cxx
 local.properties
 /app/build/
+/pwa/node_modules/
+/pwa/dist/
+/pwa/*.tsbuildinfo
+/app/src/main/assets/web/
+/app/src/main/assets/detect-favorites.js
+/ios/StickerBridge/Resources/
+/ios/Pods/
+/ios/*.xcworkspace/
+/ios/*.xcodeproj/
+/ios/StickerBridge/Info.plist
+/ios/build/
